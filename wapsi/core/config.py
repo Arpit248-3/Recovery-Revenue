@@ -62,6 +62,13 @@ class WapsiSettings(BaseSettings):
     policy_max_daily_touches: int = Field(default=2, alias="POLICY_MAX_DAILY_TOUCHES")
     policy_min_ivr_amount: float = Field(default=1500.0, alias="POLICY_MIN_IVR_AMOUNT")
 
+    # Database & Supabase Configuration
+    database_url: Optional[str] = Field(default=None, alias="DATABASE_URL")
+    supabase_url: str = Field(default="https://ffgsrwjhguvubmhuefyj.supabase.co", alias="SUPABASE_URL")
+    supabase_anon_key: Optional[SecretStr] = Field(default=None, alias="SUPABASE_ANON_KEY")
+    supabase_service_role_key: Optional[SecretStr] = Field(default=None, alias="SUPABASE_SERVICE_ROLE_KEY")
+    customer_hash_salt: SecretStr = Field(default=SecretStr("wapsi_customer_hash_salt_demo_2026"), alias="CUSTOMER_HASH_SALT")
+
     @model_validator(mode="before")
     @classmethod
     def populate_windows_env_fallbacks(cls, values: dict) -> dict:

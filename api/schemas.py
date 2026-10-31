@@ -242,6 +242,7 @@ class RecoveryPredictResponse(BaseModel):
 class HealthResponse(BaseModel):
     """Service health status response."""
     model_config = ConfigDict(
+        extra="allow",
         json_schema_extra={
             "example": {
                 "status": "healthy",
@@ -257,6 +258,9 @@ class HealthResponse(BaseModel):
     version: str
     models_loaded: bool
     timestamp: str
+    database: Optional[Dict[str, Any]] = None
+    tee_boundary: Optional[Dict[str, Any]] = None
+    audit_ledger_status: Optional[Dict[str, Any]] = None
 
 
 class ModelInfoResponse(BaseModel):

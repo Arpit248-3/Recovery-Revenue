@@ -28,12 +28,12 @@ class LLMDecisionExplainer:
         """
         Produces an auditable plain-English summary of the causal decision.
         """
-        action = decision_result["recommended_action"]
-        action_name = html.escape(str(decision_result["recommended_action_name"]))
-        tau = decision_result["individual_treatment_effect_uplift"]
-        baseline_prob = decision_result["baseline_organic_recovery_prob"]
-        exp_prob = decision_result["expected_action_recovery_prob"]
-        net_util = decision_result["net_expected_utility_inr"]
+        action = decision_result.get("recommended_action", RecoveryAction.NO_ACTION.value)
+        action_name = html.escape(str(decision_result.get("recommended_action_name", str(action))))
+        tau = decision_result.get("individual_treatment_effect_uplift", 0.0)
+        baseline_prob = decision_result.get("baseline_organic_recovery_prob", 0.15)
+        exp_prob = decision_result.get("expected_action_recovery_prob", min(1.0, baseline_prob + tau))
+        net_util = decision_result.get("net_expected_utility_inr", 0.0)
         delay_str = html.escape(str(decision_result.get("timing", {}).get("delay_human_readable", "immediate")))
         
         # Drivers from SHAP

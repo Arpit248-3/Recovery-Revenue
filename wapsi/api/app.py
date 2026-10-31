@@ -76,6 +76,7 @@ from wapsi.security.validation import (
     InMemoryRateLimiter,
     WebhookValidator,
 )
+from wapsi.db.service import get_persistence_service
 
 # Configure structured application logger
 logging.basicConfig(
@@ -313,6 +314,7 @@ def health_check():
     models_ready = engine is not None and getattr(engine, "uplift_model", None) is not None
     integrity = audit_ledger.verify_integrity()
     attestation = tee_boundary.generate_attestation_report()
+    db_health = get_persistence_service().get_health_status()
 
     return {
         "status": "healthy",
@@ -322,6 +324,7 @@ def health_check():
         "models_loaded": bool(models_ready),
         "tee_boundary": attestation,
         "audit_ledger_status": integrity,
+        "database": db_health,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -408,6 +411,18 @@ async def predict_recovery(
             "confidence": decision_object["confidence"],
             "policy_status": decision_object["policy_status"],
         })
+
+        # Durable Database Persistence (Phase 1B)
+        try:
+            db_res = get_persistence_service().persist_causal_decision(
+                decision_object=decision_object,
+                raw_event=case_data,
+                merchant_code=case_data.get("merchant_id"),
+            )
+            decision_object["audit_hash"] = db_res.get("audit_hash", decision_object.get("decision_id"))
+        except Exception as db_err:
+            logger.warning(f"Database persistence non-fatal notification: {db_err}")
+
         return RecoveryPredictResponse(**decision_object)
     except Exception as e:
         logger.error(f"Inference error for case {case_data.get('case_id')}: {e}", exc_info=True)
@@ -531,6 +546,10 @@ def decide_recovery(
     # 7. Precedents & SHAP Explanations
     precedent_res = {"nearest_precedents": pred.get("precedents", [])}
     shap_res = {
+        "positive_drivers": [
+            {"feature_name": r.get("feature", "feature"), "shap_contribution": r.get("impact", 0.05)}
+            for r in pred.get("explanation", {}).get("top_reasons", [])
+        ],
         "top_features": [
             {"feature": r.get("feature", "feature"), "shap_value": r.get("impact", 0.05), "feature_value": r.get("value", 0)}
             for r in pred.get("explanation", {}).get("top_reasons", [])
@@ -538,10 +557,16 @@ def decide_recovery(
     }
 
     # 8. LLM Plain-English Rationale & Safe Localized Copy
+    action_meta = ACTION_METADATA.get(RecoveryAction(recommended_action), {}) if recommended_action in [a.value for a in RecoveryAction] else {}
+    action_name = action_meta.get("action_name", recommended_action.replace("_", " ").title())
     causal_summary = {
         "recommended_action": recommended_action,
+        "recommended_action_name": action_name,
         "individual_treatment_effect_uplift": uplift,
+        "baseline_organic_recovery_prob": 0.15,
+        "expected_action_recovery_prob": min(1.0, 0.15 + uplift),
         "net_expected_utility_inr": net_utility,
+        "timing": {"delay_human_readable": "immediate (next 15m)"},
     }
     rationale = LLMDecisionExplainer.generate_plain_english_rationale(
         decision_result=causal_summary,
@@ -744,7 +769,7 @@ async def handle_webhook(
             detail=f"Webhook timestamp expired or out of bounds. Current: {current_ts}, Event: {payload.timestamp}",
         )
 
-    # 3. Replay Protection & Idempotency
+    # 3. Replay Protection & Durable Webhook Inbox Deduplication
     event_key = f"{payload.event}_{payload.payment_id}_{payload.nonce}"
     if not anti_replay_cache.check_and_record(event_key) or event_key in processed_webhook_nonces:
         return WebhookResponse(
@@ -754,6 +779,28 @@ async def handle_webhook(
             idempotency_status="duplicate_ignored",
             timestamp=datetime.now(timezone.utc).isoformat(),
         )
+
+    # Durable Inbox Persistence Check (Phase 1B)
+    try:
+        _, is_new = get_persistence_service().record_webhook_event(
+            provider="razorpay",
+            environment="test",
+            payment_id=payload.payment_id,
+            event_type=payload.event,
+            nonce=payload.nonce,
+            signature=signature,
+            payload_sanitized=payload.model_dump(),
+        )
+        if not is_new:
+            return WebhookResponse(
+                status="received",
+                event_id=event_key,
+                signature_verified=True,
+                idempotency_status="duplicate_ignored",
+                timestamp=datetime.now(timezone.utc).isoformat(),
+            )
+    except Exception as db_err:
+        logger.warning(f"Database webhook inbox non-fatal notification: {db_err}")
 
     processed_webhook_nonces.add(event_key)
 
