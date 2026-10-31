@@ -1,6 +1,8 @@
--- WAPSI Migration 4: Development & Testing Seed Fixtures
--- Project: ffgsrwjhguvubmhuefyj (Razorpay AI Buildathon 2026 - Track 3)
--- Safe, deterministic initial fixtures for local integration testing
+-- WAPSI Development & Testing Seed Fixtures (supabase/seed.sql)
+-- Target: WAPSI-DEV-MUMBAI (Region: ap-south-1)
+-- Safe, deterministic initial fixtures for local integration testing & staging.
+-- Loaded automatically by `supabase db reset` or selectively applied in development.
+-- NEVER executed during production `supabase db push` migrations.
 
 -- 1. Insert Default Test Merchant
 INSERT INTO public.merchants (
@@ -105,4 +107,3 @@ INSERT INTO public.audit_ledger_blocks (
     '{"system": "wapsi-causal-decision-engine", "status": "BOOTSTRAP_COMPLETE", "enclave": "ATTESTED"}'::jsonb,
     now()
 ) ON CONFLICT (merchant_id, block_index) DO NOTHING;
-

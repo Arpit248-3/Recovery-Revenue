@@ -24,7 +24,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from sqlalchemy import desc, select
+from sqlalchemy import desc, select, text
 from sqlalchemy.orm import Session
 
 from wapsi.core.config import get_settings
@@ -465,6 +465,15 @@ class AuditLedgerRepository:
         merchant_id: Optional[uuid.UUID] = None,
     ) -> AuditLedgerBlockModel:
         """Appends a new cryptographically chained block to the audit ledger."""
+        # Under PostgreSQL, acquire transaction-scoped advisory lock to prevent concurrent index collision
+        try:
+            bind = session.get_bind()
+            if bind and "postgresql" in str(bind.url):
+                lock_id = (hash(f"audit_ledger_{merchant_id}") & 0x7FFFFFFF)
+                session.execute(text("SELECT pg_advisory_xact_lock(:lock_id)"), {"lock_id": lock_id})
+        except Exception:
+            pass  # Fallback gracefully if dialect doesn't support advisory locks
+
         # Find latest block index and hash
         stmt = (
             select(AuditLedgerBlockModel)

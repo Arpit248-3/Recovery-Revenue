@@ -39,8 +39,10 @@ class DatabaseManager:
             self.is_fallback_mode = True
             logger.info("DATABASE_URL not configured. Initialized safe local SQLite fallback engine.")
         elif url.startswith("postgres://"):
-            # SQLAlchemy 2.0 requires postgresql:// instead of postgres://
+            # SQLAlchemy 2.0 requires postgresql+psycopg2:// instead of postgres://
             url = url.replace("postgres://", "postgresql+psycopg2://", 1)
+        elif url.startswith("postgresql://") and not url.startswith("postgresql+"):
+            url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
 
         self.database_url = url
         
@@ -48,6 +50,15 @@ class DatabaseManager:
         connect_args = {}
         if "sqlite" in url:
             connect_args = {"check_same_thread": False}
+        elif "postgresql" in url:
+            # Check driver availability
+            try:
+                import psycopg2  # noqa: F401
+            except ImportError:
+                logger.warning(
+                    "DATABASE_URL is configured for PostgreSQL, but 'psycopg2' driver is not installed in the environment. "
+                    "Install with: pip install psycopg2-binary>=2.9.9"
+                )
 
         self.engine: Engine = create_engine(
             self.database_url,

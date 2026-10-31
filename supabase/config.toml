@@ -1,5 +1,7 @@
 # Supabase configuration file for WAPSI (Razorpay AI Buildathon 2026 - Track 3)
-project_id = "ffgsrwjhguvubmhuefyj"
+# Active Development Target: WAPSI-DEV-MUMBAI (Region: ap-south-1)
+# Historical Reference (Ireland): ffgsrwjhguvubmhuefyj
+project_id = "filofxijqmgluuulivxb"
 
 [api]
 enabled = true
@@ -12,6 +14,7 @@ max_rows = 1000
 port = 54322
 shadow_port = 54320
 major_version = 15
+seed_file = "supabase/seed.sql"
 
 [auth]
 enabled = true
