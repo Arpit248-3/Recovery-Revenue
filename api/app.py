@@ -41,6 +41,7 @@ from api.schemas import (
 from src.inference import WAPSIInferenceEngine, get_default_engine
 from src.data_generator import TREATMENTS, DOMAINS, DECLINE_REASONS
 from wapsi.security.validation import WebhookValidator, InMemoryRateLimiter
+from wapsi.core.config import get_settings
 
 # Configure structured application logger
 logging.basicConfig(
@@ -51,10 +52,24 @@ logging.basicConfig(
 logger = logging.getLogger("wapsi.api")
 
 # Global Security Singletons
+settings = get_settings()
 api_rate_limiter = InMemoryRateLimiter(max_requests_per_minute=120)
 processed_webhook_nonces = set()
-WEBHOOK_SECRET = "rzp_webhook_secret_dev_demo"
-VALID_API_KEYS = {"rzp_live_wapsi_key_demo", "rzp_test_wapsi_key_2026"}
+WEBHOOK_SECRET = (
+    settings.razorpay_webhook_secret.get_secret_value()
+    if settings.razorpay_webhook_secret
+    else "rzp_webhook_secret_dev_demo"
+)
+_configured_key = (
+    settings.wapsi_api_key.get_secret_value()
+    if settings.wapsi_api_key
+    else "rzp_test_wapsi_key_2026"
+)
+VALID_API_KEYS = {
+    "rzp_live_wapsi_key_demo",
+    "rzp_test_wapsi_key_2026",
+    _configured_key
+}
 
 
 @asynccontextmanager
