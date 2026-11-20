@@ -1,0 +1,17 @@
+{
+  "project_ref": "filofxijqmgluuulivxb",
+  "host": "aws-0-ap-south-1.pooler.supabase.com",
+  "port": 5432,
+  "username": "wapsi_app.filofxijqmgluuulivxb",
+  "password_provisioned": true,
+  "tests": {
+    "function_return_contract": "PASS",
+    "session_pooler_connection": "PASS",
+    "sqlalchemy_connection": "PASS",
+    "permitted_selects": "PASS",
+    "sensitive_tables_denied": "PASS",
+    "delete_privilege_denied": "PASS",
+    "api_key_lookup_function": "PASS",
+    "rls_tenant_context_rollback": "PASS"
+  }
+}

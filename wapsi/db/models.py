@@ -399,7 +399,9 @@ class RecoveryOutboxModel(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     merchant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("merchants.id", ondelete="CASCADE"), nullable=False, index=True)
-    decision_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("causal_decisions.id", ondelete="CASCADE"), nullable=False, index=True)
+    decision_id: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid, ForeignKey("causal_decisions.id", ondelete="CASCADE"), nullable=True, index=True)
+    case_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    payment_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
     idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
     action: Mapped[str] = mapped_column(String(64), nullable=False)
     channel: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -409,13 +411,19 @@ class RecoveryOutboxModel(Base):
     retry_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     max_retries: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
     next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now, nullable=False, index=True)
+    lease_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    worker_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    requires_operator_approval: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    approved_by_operator_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    approved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    approval_snapshot_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now, onupdate=_utc_now, nullable=False)
 
     __table_args__ = (
         UniqueConstraint("merchant_id", "idempotency_key", name="uq_outbox_merch_idemp"),
-        CheckConstraint("status IN ('QUEUED', 'SENDING', 'SENT', 'FAILED', 'RETRY', 'DEAD_LETTER')", name="ck_outbox_status"),
+        CheckConstraint("status IN ('PENDING_APPROVAL', 'QUEUED', 'SENDING', 'SENT', 'FAILED', 'RETRY', 'DEAD_LETTER', 'RECONCILIATION_REQUIRED', 'CANCELLED', 'REJECTED')", name="ck_outbox_status"),
     )
 
     decision = relationship("CausalDecisionModel", back_populates="outbox_entries")
@@ -516,4 +524,88 @@ class BanditWeightModel(Base):
     __table_args__ = (
         UniqueConstraint("merchant_id", "model_version", "action", name="uq_bandit_merch_ver_act"),
     )
+
+
+# ==============================================================================
+# 16. SHARED OPT-OUT & CONSENT GOVERNANCE (Multi-Worker Persistence)
+# ==============================================================================
+class OperationalBase(DeclarativeBase):
+    """Declarative base for operational and shared persistence tables outside core 15 entities."""
+
+    def to_dict(self) -> Dict[str, Any]:
+        result = {}
+        for col in self.__table__.columns:
+            val = getattr(self, col.name)
+            if isinstance(val, uuid.UUID):
+                result[col.name] = str(val)
+            elif isinstance(val, datetime):
+                result[col.name] = val.isoformat()
+            else:
+                result[col.name] = val
+        return result
+
+
+class OptOutRegistryModel(OperationalBase):
+    __tablename__ = "opt_out_registry"
+
+    phone: Mapped[str] = mapped_column(String(32), primary_key=True)
+    reason: Mapped[str] = mapped_column(String(128), default="STOP_KEYWORD", nullable=False)
+    source: Mapped[str] = mapped_column(String(64), default="inbound_whatsapp", nullable=False)
+    opted_out_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now, nullable=False)
+    actor: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class CustomerInteractionModel(OperationalBase):
+    __tablename__ = "customer_interactions"
+
+    phone: Mapped[str] = mapped_column(String(32), primary_key=True)
+    last_interaction_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now, nullable=False)
+
+
+class OptOutAuditTrailModel(OperationalBase):
+    __tablename__ = "opt_out_audit_trail"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    phone: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    action: Mapped[str] = mapped_column(String(64), nullable=False)
+    reason: Mapped[str] = mapped_column(String(128), nullable=False)
+    source: Mapped[str] = mapped_column(String(64), nullable=False)
+    consent_proof: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now, nullable=False)
+    actor: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+
+
+class ObservationalLearningRecordModel(OperationalBase):
+    __tablename__ = "observational_learning_records"
+
+    decision_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    payment_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    merchant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    case_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    decision_timestamp_utc: Mapped[str] = mapped_column(String(64), nullable=False)
+    context_features: Mapped[Dict[str, Any]] = mapped_column(JSON, nullable=False)
+    feature_vector: Mapped[Optional[List[float]]] = mapped_column(JSON, nullable=True)
+    action_selected: Mapped[str] = mapped_column(String(64), nullable=False)
+    action_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    assignment_propensity: Mapped[float] = mapped_column(Numeric(6, 4), nullable=False)
+    is_propensity_valid: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    policy_version: Mapped[str] = mapped_column(String(32), default="v1.0.0", nullable=False)
+    model_version: Mapped[str] = mapped_column(String(32), default="v1.2.0-dml", nullable=False)
+    feature_schema_version: Mapped[str] = mapped_column(String(32), default="v1", nullable=False)
+    reward_definition_version: Mapped[str] = mapped_column(String(32), default="v1", nullable=False)
+    observation_status: Mapped[str] = mapped_column(String(32), default="PENDING_OUTCOME", nullable=False, index=True)
+    outcome_status: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    recovered_amount_paise: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    outcome_timestamp_utc: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    event_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
+    event_source: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    deterministic_reward: Mapped[Optional[float]] = mapped_column(Numeric(6, 4), nullable=True)
+    is_eligible_for_dml: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    is_eligible_for_bandit: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    exclusion_reasons: Mapped[List[str]] = mapped_column(JSON, default=list, nullable=False)
+    correction_history: Mapped[List[Dict[str, Any]]] = mapped_column(JSON, default=list, nullable=False)
+    created_at_utc: Mapped[str] = mapped_column(String(64), nullable=False)
+    updated_at_utc: Mapped[str] = mapped_column(String(64), nullable=False)
 

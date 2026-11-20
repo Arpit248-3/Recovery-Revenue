@@ -63,7 +63,9 @@ class ContextualBanditEngine:
             return {
                 "bandit_action": causal_recommended_action,
                 "is_exploration": False,
-                "ucb_scores": {}
+                "ucb_scores": {},
+                "assignment_propensity": 1.0,
+                "feature_vector": None,
             }
 
         df = pd.DataFrame([event_dict])
@@ -78,10 +80,10 @@ class ContextualBanditEngine:
             confidence_bound = self.alpha * np.sqrt(x @ A_inv @ x)
             ucb_scores[act] = float(mean_reward + confidence_bound)
 
+        best_bandit_arm = max(ucb_scores, key=ucb_scores.get)
         # Decide whether to explore or exploit
         if self.rng.uniform() < self.exploration_prob:
             # Safe exploration: Choose highest UCB arm
-            best_bandit_arm = max(ucb_scores, key=ucb_scores.get)
             is_exploration = (best_bandit_arm != causal_recommended_action)
             chosen_action = best_bandit_arm if is_exploration else causal_recommended_action
         else:
@@ -89,10 +91,20 @@ class ContextualBanditEngine:
             chosen_action = causal_recommended_action
             is_exploration = False
 
+        if chosen_action == causal_recommended_action:
+            if best_bandit_arm == causal_recommended_action:
+                propensity = 1.0
+            else:
+                propensity = round(1.0 - self.exploration_prob, 4)
+        else:
+            propensity = round(self.exploration_prob, 4)
+
         return {
             "bandit_action": chosen_action,
             "is_exploration": is_exploration,
-            "ucb_scores": {k: round(v, 4) for k, v in ucb_scores.items()}
+            "ucb_scores": {k: round(v, 4) for k, v in ucb_scores.items()},
+            "assignment_propensity": propensity,
+            "feature_vector": x.tolist(),
         }
 
     def update(self, event_dict: Dict[str, Any], action: str, reward: float):

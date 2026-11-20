@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "skills": {
+    "banner-design": {
+      "source": "nextlevelbuilder/ui-ux-pro-max-skill",
+      "sourceType": "github",
+      "skillPath": ".claude/skills/banner-design/SKILL.md",
+      "computedHash": "0645bfc33632c7b332e649e35738ea807e1571436289cdaf86bebe6660c693ec",
+      "installMode": "copy"
+    },
+    "playwright": {
+      "source": "magnus919/agent-skills",
+      "sourceType": "github",
+      "skillPath": "playwright/SKILL.md",
+      "computedHash": "a81fddf7321a1f8b48366f524101ed08bda1648a402cca8f262a075b79e275c6"
+    },
+    "ui-ux-pro-max": {
+      "source": "nextlevelbuilder/ui-ux-pro-max-skill",
+      "sourceType": "github",
+      "skillPath": ".claude/skills/ui-ux-pro-max/SKILL.md",
+      "computedHash": "1c584be8d06885d32534d2db379d4a86475dde1239137c8374a972100859b87f",
+      "installMode": "copy"
+    },
+    "web-accessibility": {
+      "source": "hoodini/ai-agents-skills",
+      "sourceType": "github",
+      "skillPath": "skills/web-accessibility/SKILL.md",
+      "computedHash": "0b5f9a9c98a7d1e3f6494b4d95f9fba30957e1b14810c53870aeb506dc0cefc2"
+    }
+  }
+}

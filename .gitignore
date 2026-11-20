@@ -27,3 +27,12 @@ Thumbs.db
 .env.*.local
 !.env.example
 
+# Supabase CLI Local State
+supabase/.temp/
+
+# WAPSI Local Development Data & SQLite
+.wapsi_data/
+*.db
+.tmp_*
+.wapsi_worker_heartbeat*
+

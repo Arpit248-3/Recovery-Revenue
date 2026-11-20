@@ -66,11 +66,17 @@ class CausalMetricsResult(BaseModel):
 class CausalDecisionResponse(BaseModel):
     decision_id: str
     payment_id: str
+    case_id: Optional[str] = None
+    merchant_id: Optional[str] = None
+    model_version: Optional[str] = None
     recommended_action: str
     recommended_action_name: str
     authorized_action: str
     channel: str
     execution_status: str
+    requires_human_approval: bool = False
+    human_approval_reason: Optional[str] = None
+    risk_score: Optional[float] = None
     root_cause: Dict[str, Any]
     policy_evaluation: PolicyEvaluationResult
     causal_metrics: CausalMetricsResult
@@ -81,6 +87,61 @@ class CausalDecisionResponse(BaseModel):
     localized_copy: Dict[str, Any]
     audit_hash: str
     timestamp: str
+
+
+class UnifiedCausalDecisionRequest(BaseModel):
+    payment_id: str
+    case_id: Optional[str] = None
+    merchant_id: Optional[str] = "merch_default"
+    amount_in_inr: float = 1000.0
+    amount_paise: Optional[int] = None
+    currency: Optional[str] = "INR"
+    error_code: str = "insufficient_funds"
+    error_description: Optional[str] = ""
+    payment_method: Optional[str] = "upi"
+    retry_attempt_number: Optional[int] = 1
+    max_retries: Optional[int] = 3
+    historical_recovery_rate: Optional[float] = 0.5
+    customer_phone: Optional[str] = None
+    customer_email: Optional[str] = None
+    customer_name: Optional[str] = None
+    merchant_category: Optional[str] = "ecommerce"
+    merchant_margin: Optional[float] = 0.20
+    disallowed_actions: Optional[List[str]] = Field(default_factory=list)
+    is_pre_approved_by_operator: Optional[bool] = False
+    model_choice: Optional[str] = "dml"  # "dml", "x_learner", "t_learner"
+
+
+class UnifiedCausalDecisionResponse(BaseModel):
+    decision_id: str
+    case_id: str
+    payment_id: str
+    merchant_id: str
+    amount_in_inr: float
+    model_version: str
+    model_readiness_status: str = "BENCHMARK_VALIDATED_AWAITING_PRODUCTION_LOGS"
+    deployment_mode: str = "ADVISORY_HUMAN_REVIEW"
+    risk_score: float
+    risk_assessment: Dict[str, Any]
+    recommended_action: str
+    recommended_action_name: str
+    authorized_action: str
+    channel: str
+    execution_status: str
+    requires_human_approval: bool
+    human_approval_reason: Optional[str] = None
+    estimated_treatment_uplift: float
+    expected_recovered_value_inr: float
+    net_expected_economic_value_inr: float
+    uncertainty_information: Dict[str, Any]
+    policy_decisions: Dict[str, Any]
+    action_rankings: List[Dict[str, Any]]
+    explanation_and_evidence: Dict[str, Any]
+    plain_english_rationale: str
+    localized_copy: Dict[str, Any]
+    decision_timestamp: str
+    audit_hash: str
+    snapshot_hash: str
 
 
 class ActionExecuteRequest(BaseModel):
@@ -121,3 +182,70 @@ class HealthCheckResponse(BaseModel):
     models_ready: bool
     tee_boundary: Dict[str, Any]
     audit_ledger_status: Dict[str, Any]
+
+
+class RecoveryPaymentLinkRequest(BaseModel):
+    case_id: Optional[str] = Field(default=None, max_length=64, description="Unique recovery case identifier")
+    payment_id: Optional[str] = Field(default=None, max_length=64, description="Failed payment identifier")
+    amount_paise: Optional[int] = Field(default=None, ge=100, le=100000000, description="Amount in integer paise")
+    amount_inr: Optional[float] = Field(default=None, ge=1.0, le=1000000.0, description="Amount in INR decimal")
+    amount_in_inr: Optional[float] = Field(default=None, ge=1.0, le=1000000.0, description="Amount in INR decimal (alias)")
+    customer_name: str = Field(default="Valued Customer", min_length=1, max_length=100)
+    customer_phone: str = Field(..., min_length=10, max_length=20, description="Customer phone number")
+    merchant_name: str = Field(default="Merchant", max_length=100)
+    merchant_id: Optional[str] = Field(default=None, max_length=64)
+    expire_minutes: int = Field(default=15, ge=5, le=120)
+    template_name: Optional[str] = Field(default=None, max_length=64)
+
+
+class CreateRecoveryCaseRequest(BaseModel):
+    case_id: Optional[str] = Field(default=None, max_length=64, description="Unique recovery case identifier")
+    payment_id: str = Field(..., max_length=128, description="Failed payment identifier")
+    amount_paise: Optional[int] = Field(default=None, ge=100, le=100000000, description="Amount in integer paise")
+    amount_inr: Optional[float] = Field(default=None, ge=1.0, le=1000000.0, description="Amount in INR decimal")
+    amount_in_inr: Optional[float] = Field(default=None, ge=1.0, le=1000000.0, description="Amount in INR decimal (alias)")
+    customer_phone: str = Field(..., min_length=10, max_length=20, description="Customer phone number")
+    customer_name: str = Field(default="Valued Customer", min_length=1, max_length=100)
+    merchant_name: str = Field(default="Merchant", max_length=100)
+    merchant_id: Optional[str] = Field(default="default_merchant", max_length=64)
+    error_code: str = Field(default="GATEWAY_TIMEOUT", max_length=64)
+    error_category: str = Field(default="TECHNICAL_GATEWAY", max_length=64)
+    max_attempts: int = Field(default=3, ge=1, le=10)
+
+
+class ScheduleRecoveryCaseRequest(BaseModel):
+    customer_timezone: Optional[str] = Field(default="Asia/Kolkata", max_length=64)
+    delay_seconds: Optional[int] = Field(default=0, ge=0, le=86400)
+    template_name: Optional[str] = Field(default=None, max_length=64)
+
+
+class CancelRecoveryCaseRequest(BaseModel):
+    reason: str = Field(default="MANUAL_CANCEL", min_length=1, max_length=255)
+
+
+class ApproveOutboxJobRequest(BaseModel):
+    operator_id: str = Field(..., min_length=3, max_length=128, description="Operator identity assertion approving this job (attributed to authenticated tenant caller).")
+    reason: Optional[str] = Field(default=None, max_length=255, description="Optional approval notes or rationale.")
+
+
+class ApproveOutboxJobResponse(BaseModel):
+    job_id: str
+    status: str
+    channel: str
+    action: str
+    recipient_masked: str
+    approved_by_operator_id: str
+    approved_at: str
+    approval_snapshot_hash: str
+
+
+class RejectOutboxJobRequest(BaseModel):
+    operator_id: str = Field(..., min_length=3, max_length=128, description="Operator identity assertion rejecting this job (attributed to authenticated tenant caller).")
+    reason: str = Field(default="Rejected by operator", min_length=3, max_length=255, description="Rejection rationale.")
+
+
+class RejectOutboxJobResponse(BaseModel):
+    job_id: str
+    status: str
+    operator_id: str
+    reason: str

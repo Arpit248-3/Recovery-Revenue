@@ -41,7 +41,7 @@ from api.schemas import (
 from src.inference import WAPSIInferenceEngine, get_default_engine
 from src.data_generator import TREATMENTS, DOMAINS, DECLINE_REASONS
 from wapsi.security.validation import WebhookValidator, InMemoryRateLimiter
-from wapsi.core.config import get_settings
+from wapsi.core.config import get_settings, is_dev_fallback_permitted
 
 # Configure structured application logger
 logging.basicConfig(
@@ -60,16 +60,14 @@ WEBHOOK_SECRET = (
     if settings.razorpay_webhook_secret
     else "rzp_webhook_secret_dev_demo"
 )
-_configured_key = (
-    settings.wapsi_api_key.get_secret_value()
-    if settings.wapsi_api_key
-    else "rzp_test_wapsi_key_2026"
-)
-VALID_API_KEYS = {
-    "rzp_live_wapsi_key_demo",
-    "rzp_test_wapsi_key_2026",
-    _configured_key
-}
+def get_valid_api_keys(request: Optional[Request] = None) -> set:
+    s = get_settings()
+    keys = set()
+    if s.wapsi_api_key and s.wapsi_api_key.get_secret_value().strip():
+        keys.add(s.wapsi_api_key.get_secret_value().strip())
+    if is_dev_fallback_permitted(s, request):
+        keys.update(s.get_valid_api_keys())
+    return keys
 
 
 @asynccontextmanager
@@ -257,21 +255,60 @@ async def predict_recovery(
     request_payload: RecoveryPredictRequest,
     request: Request
 ) -> RecoveryPredictResponse:
-    # 1. API Key Authentication Check (if provided in header)
+    # 1. API Key Authentication Check (Database lookup or dev fallback)
     api_key = request.headers.get("X-API-Key")
-    if api_key is not None and api_key not in VALID_API_KEYS:
+    valid_keys = get_valid_api_keys(request)
+
+    db_auth = None
+    if api_key:
+        try:
+            from wapsi.db.session import get_db_manager
+            from wapsi.db.repository import MerchantRepository
+            mgr = get_db_manager()
+            with mgr.session_scope() as sess:
+                db_auth = MerchantRepository.authenticate_api_key(sess, api_key)
+        except Exception:
+            pass
+
+    if api_key is None:
+        if not is_dev_fallback_permitted(settings, request):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Unauthorized: Missing API Key in X-API-Key header."
+            )
+    elif not db_auth and api_key not in valid_keys:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid API Key provided in X-API-Key header."
         )
 
-    # 2. Tenant Isolation Check (Merchant A cannot access/predict for Merchant B)
-    auth_merchant_id = request.headers.get("X-Merchant-ID")
-    if auth_merchant_id and auth_merchant_id != request_payload.merchant_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Tenant authorization failure: X-Merchant-ID header '{auth_merchant_id}' does not match request merchant_id '{request_payload.merchant_id}'."
-        )
+    # 2. Tenant Isolation Check (Authoritative server-side identity verification)
+    if db_auth:
+        status_val = str(db_auth.get("merchant_status") or "").upper()
+        if status_val != "ACTIVE":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Forbidden: Merchant account status is '{status_val}', expected 'ACTIVE'.",
+            )
+        valid_m_ids = {str(db_auth["merchant_id"]), str(db_auth["merchant_code"])}
+        if request_payload.merchant_id and request_payload.merchant_id not in valid_m_ids:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Tenant authorization failure: request merchant_id '{request_payload.merchant_id}' does not match authenticated merchant."
+            )
+        header_m = request.headers.get("X-Merchant-ID")
+        if header_m and header_m not in valid_m_ids:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Tenant authorization failure: X-Merchant-ID header '{header_m}' does not match authenticated merchant."
+            )
+    else:
+        auth_merchant_id = request.headers.get("X-Merchant-ID")
+        if auth_merchant_id and auth_merchant_id != request_payload.merchant_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Tenant authorization failure: X-Merchant-ID header '{auth_merchant_id}' does not match request merchant_id '{request_payload.merchant_id}'."
+            )
 
     # 3. TEE Attestation Check (Fail-Closed if attestation is invalid/tampered)
     attestation_header = request.headers.get("X-Enclave-Attestation")
@@ -290,6 +327,8 @@ async def predict_recovery(
     try:
         decision_object = engine.predict(case_data)
         return RecoveryPredictResponse(**decision_object)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Inference error for case {case_data.get('case_id')}: {e}", exc_info=True)
         raise HTTPException(

@@ -338,6 +338,8 @@ def test_recovery_outbox_state_transitions(test_db):
             recipient_masked="+9198****1234",
             message_payload={"link": "https://rzp.io/r/pay_outbox_001"},
         )
+        assert outbox.status == "PENDING_APPROVAL"
+        outbox = RecoveryOutboxRepository.approve_job(session, outbox.id, "operator_test")
         assert outbox.status == "QUEUED"
         assert outbox.retry_count == 0
         outbox_id = outbox.id
@@ -487,6 +489,8 @@ def test_atomic_transactional_commit_and_rollback(test_service, test_db):
             select(RecoveryOutboxModel).where(RecoveryOutboxModel.decision_id == decision.id)
         ).scalar_one_or_none()
         assert outbox is not None
+        assert outbox.status == "PENDING_APPROVAL"
+        outbox = RecoveryOutboxRepository.approve_job(session, outbox.id, "operator_test")
         assert outbox.status == "QUEUED"
 
         # Audit Block

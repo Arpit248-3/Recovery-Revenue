@@ -28,6 +28,8 @@ class DatabaseManager:
     Manages SQLAlchemy engine lifecycle, session factories, and database connectivity.
     """
 
+    _shared_engines: Dict[str, Engine] = {}
+
     def __init__(self, database_url: Optional[str] = None):
         settings = get_settings()
         url = database_url or settings.database_url
@@ -47,7 +49,12 @@ class DatabaseManager:
         self.database_url = url
         
         # Engine configuration
-        connect_args = {}
+        connect_args: Dict[str, Any] = {}
+        engine_kwargs: Dict[str, Any] = {
+            "pool_pre_ping": True,
+            "echo": False,
+        }
+
         if "sqlite" in url:
             connect_args = {"check_same_thread": False}
         elif "postgresql" in url:
@@ -60,12 +67,31 @@ class DatabaseManager:
                     "Install with: pip install psycopg2-binary>=2.9.9"
                 )
 
-        self.engine: Engine = create_engine(
-            self.database_url,
-            connect_args=connect_args,
-            pool_pre_ping=True,
-            echo=False,
-        )
+            # Supabase pooler / production connection optimizations
+            engine_kwargs.update({
+                "pool_size": 10,
+                "max_overflow": 5,
+                "pool_recycle": 300,
+            })
+
+            # Remote PostgreSQL (such as Supabase pooler) requires SSL
+            if "localhost" not in url and "127.0.0.1" not in url and "sslmode" not in url:
+                connect_args["sslmode"] = "require"
+
+        engine_kwargs["connect_args"] = connect_args
+
+        if ":memory:" in self.database_url:
+            self.engine: Engine = create_engine(
+                self.database_url,
+                **engine_kwargs,
+            )
+        else:
+            if self.database_url not in DatabaseManager._shared_engines:
+                DatabaseManager._shared_engines[self.database_url] = create_engine(
+                    self.database_url,
+                    **engine_kwargs,
+                )
+            self.engine = DatabaseManager._shared_engines[self.database_url]
 
         self.session_factory = sessionmaker(
             bind=self.engine,
@@ -96,9 +122,41 @@ class DatabaseManager:
         """
         Context manager for transactional database operations.
         Automatically commits on successful block exit; rolls back on exception.
+        Ensures any previous tenant context is cleared (fails closed).
         """
         session = self.session_factory()
         try:
+            if self.engine.dialect.name == "postgresql":
+                session.execute(
+                    text("SELECT set_config('app.current_merchant_id', '', true)")
+                )
+            yield session
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    @contextmanager
+    def tenant_session_scope(self, merchant_id: Any) -> Generator[Session, None, None]:
+        """
+        Context manager for tenant-scoped database operations.
+        Under PostgreSQL, sets transaction-local merchant context:
+        SELECT set_config('app.current_merchant_id', :merchant_id, true)
+        Automatically rolls back on exception and resets context upon transaction close.
+        Fails closed on None, empty, or whitespace merchant IDs.
+        """
+        session = self.session_factory()
+        try:
+            m_id_str = str(merchant_id).strip() if merchant_id is not None else ""
+            if m_id_str.lower() in ("none", "null", ""):
+                m_id_str = ""
+            if self.engine.dialect.name == "postgresql":
+                session.execute(
+                    text("SELECT set_config('app.current_merchant_id', :merchant_id, true)"),
+                    {"merchant_id": m_id_str},
+                )
             yield session
             session.commit()
         except Exception:
@@ -110,6 +168,34 @@ class DatabaseManager:
     def get_session(self) -> Session:
         """Returns a new session instance. Caller must close the session."""
         return self.session_factory()
+
+    def check_runtime_role(self) -> Dict[str, Any]:
+        """
+        Inspects the connected database role to verify least-privilege status.
+        Detects whether running as administrative superuser/bypassrls role.
+        """
+        if self.engine.dialect.name != "postgresql":
+            return {"dialect": self.engine.dialect.name, "is_restricted": True, "role": "sqlite"}
+        with self.session_scope() as session:
+            row = session.execute(
+                text("SELECT current_user, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user")
+            ).fetchone()
+            if row:
+                current_user, rolsuper, rolbypassrls = row[0], bool(row[1]), bool(row[2])
+                is_admin = rolsuper or rolbypassrls
+                return {
+                    "dialect": "postgresql",
+                    "role": current_user,
+                    "is_superuser": rolsuper,
+                    "bypass_rls": rolbypassrls,
+                    "is_restricted": not is_admin,
+                    "warning": (
+                        "Administrative superuser/bypassrls role detected. "
+                        "Configure restricted 'wapsi_app' role for multi-merchant production runtime."
+                        if is_admin else None
+                    ),
+                }
+            return {"dialect": "postgresql", "role": "unknown", "is_restricted": False}
 
     def ping(self) -> Dict[str, Any]:
         """
@@ -153,5 +239,12 @@ def get_db() -> Generator[Session, None, None]:
     """FastAPI route dependency yielding a scoped database session."""
     manager = get_db_manager()
     with manager.session_scope() as session:
+        yield session
+
+
+def get_tenant_db(merchant_id: Any) -> Generator[Session, None, None]:
+    """FastAPI route dependency yielding a tenant-scoped database session."""
+    manager = get_db_manager()
+    with manager.tenant_session_scope(merchant_id) as session:
         yield session
 

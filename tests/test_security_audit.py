@@ -30,9 +30,22 @@ from src.inference import wapsi
 
 @pytest.fixture(scope="module")
 def client():
-    """FastAPI TestClient instance."""
-    with TestClient(app) as test_client:
-        yield test_client
+    """FastAPI TestClient instance configured with explicit test fixture settings."""
+    from wapsi.core.config import get_settings
+    s = get_settings()
+    orig_env = s.wapsi_env
+    orig_fallback = s.allow_dev_auth_fallback
+    orig_base = s.public_base_url
+    s.wapsi_env = "development"
+    s.allow_dev_auth_fallback = True
+    s.public_base_url = "http://localhost:8000"
+    try:
+        with TestClient(app) as test_client:
+            yield test_client
+    finally:
+        s.wapsi_env = orig_env
+        s.allow_dev_auth_fallback = orig_fallback
+        s.public_base_url = orig_base
 
 
 # ==============================================================================
@@ -292,7 +305,9 @@ def test_webhook_invalid_signature_rejected(client):
 
 def test_webhook_valid_signature_and_freshness_success(client):
     """Webhooks with valid HMAC-SHA256 signature and fresh timestamp must succeed."""
-    secret = "rzp_webhook_secret_dev_demo"
+    from wapsi.core.config import get_settings
+    settings = get_settings()
+    secret = settings.razorpay_webhook_secret.get_secret_value() if settings.razorpay_webhook_secret else "rzp_webhook_secret_dev_demo"
     payload = {
         "event": "payment.recovered",
         "payment_id": "pay_test_999",
@@ -318,7 +333,9 @@ def test_webhook_valid_signature_and_freshness_success(client):
 
 def test_webhook_expired_timestamp_rejected(client):
     """Webhooks with stale timestamps (>300s old) must be rejected to prevent replay attacks."""
-    secret = "rzp_webhook_secret_dev_demo"
+    from wapsi.core.config import get_settings
+    settings = get_settings()
+    secret = settings.razorpay_webhook_secret.get_secret_value() if settings.razorpay_webhook_secret else "rzp_webhook_secret_dev_demo"
     payload = {
         "event": "payment.recovered",
         "payment_id": "pay_test_old",
@@ -340,7 +357,9 @@ def test_webhook_expired_timestamp_rejected(client):
 
 def test_webhook_replay_protection_idempotency(client):
     """Duplicate webhooks with the same nonce must be recognized and return duplicate_ignored."""
-    secret = "rzp_webhook_secret_dev_demo"
+    from wapsi.core.config import get_settings
+    settings = get_settings()
+    secret = settings.razorpay_webhook_secret.get_secret_value() if settings.razorpay_webhook_secret else "rzp_webhook_secret_dev_demo"
     payload = {
         "event": "payment.recovered",
         "payment_id": "pay_test_idempotent",
@@ -390,7 +409,7 @@ def test_secrets_audit_no_live_credentials_in_source():
 
     violations = []
     for f in py_files:
-        if ".pytest_cache" in str(f) or "test_" in str(f):
+        if ".pytest_cache" in str(f) or "test_" in str(f) or ".venv" in str(f) or "site-packages" in str(f):
             continue
         try:
             content = f.read_text(encoding="utf-8")

@@ -6,6 +6,16 @@ Verifies all compatibility endpoints required by the WAPSI React Frontend.
 import pytest
 from fastapi.testclient import TestClient
 from wapsi.api.app import app
+from wapsi.db.service import PersistenceService
+from wapsi.db.session import DatabaseManager
+
+
+@pytest.fixture(autouse=True)
+def isolate_persistence(monkeypatch):
+    """Guarantees tests use an isolated in-memory persistence service, protecting hosted database."""
+    test_db = DatabaseManager(database_url="sqlite:///:memory:")
+    test_service = PersistenceService(db_manager=test_db)
+    monkeypatch.setattr("wapsi.api.app.get_persistence_service", lambda: test_service)
 
 
 @pytest.fixture(scope="module")
